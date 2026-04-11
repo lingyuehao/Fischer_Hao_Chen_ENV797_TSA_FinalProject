@@ -41,6 +41,13 @@ train_ts <- ts(train_ts$delay_rate,
 autoplot(train_ts)
 ```
 
+#### Decompose Using STL
+
+```{r}
+decomp <- stl(train_ts, s.window = "periodic")
+autoplot(decomp)
+```
+
 #### Test Data Processing
 
 ```{r}
@@ -54,3 +61,107 @@ test_ts <- ts(test_ts$delay_rate,
               start = c(test_ts$year[1], test_ts$month[1]),
               frequency = 12)
 ```
+
+## Model 1: Exponential Smoothing (ETS)
+
+```{r}
+ets <- ets(train_ts)
+ets
+```
+
+```{r}
+forecast_ets <- forecast(ets, h = length(test_ts))
+
+autoplot(forecast_ets) +
+  autolayer(test_ts, series = "Actual", PI = FALSE) +
+  ylab("delay rate") +
+  xlab("Time")
+```
+
+```{r}
+acc_ets <- accuracy(forecast_ets, test_ts)
+acc_ets
+```
+
+**The ETS model performs well with low bias and \~11% average percentage error, beats the naïve forecast clearly (MASE \< 1, Theil’s U \< 1), and shows slightly better test accuracy than training, suggesting stable forecasting performance.**
+
+## Model 2: SARIMA
+
+```{r}
+sarima <- auto.arima(train_ts, seasonal = TRUE)
+sarima
+```
+
+#### Seasonal ARIMA(1,0,0)(2,1,0)[12]
+
+```{r}
+forecast_sarima <- forecast(sarima, h = length(test_ts))
+
+autoplot(forecast_sarima) +
+  autolayer(test_ts, series = "Actual", PI = FALSE) +
+  ylab("delay rate") +
+  xlab("Time")
+```
+
+```{r}
+acc_sarima <- accuracy(forecast_sarima, test_ts)
+acc_sarima
+```
+
+-   ME (Mean Error) – forecast bias
+
+    -   Training: -0.0023 -\> model slightly over‑forecasting on training.
+
+    -   Test: 0.0060 -\> slightly under‑forecasting on test.
+
+    -   Values are very close to 0 → little systematic bias, which is good.
+
+-   RMSE (Root Mean Squared Error) – overall error size
+
+    -   Training: 0.0299
+
+    -   Test: 0.0260 -\> smaller than training -\> generalizes reasonably well and is not overfitting.
+
+-   MAE (Mean Absolute Error) – average absolute error
+
+    -   Training: 0.0211
+
+    -   Test: 0.0210 -\> Very similar between training and test → stable model performance
+
+    -   On average, forecasts miss the actual delay rate by about 2.1%
+
+-   MPE (Mean Percentage Error) – percentage bias
+
+    -   Training: -3.09% -\> forecasts about 3% too high on average
+
+    -   Test: 1.61% -\> forecasts about 1.6% too low
+
+-   MAPE (Mean Absolute Percentage Error) – average percent error
+
+    -   Training: 11.86%
+
+    -   Test: 11.07% -\> Forecasts are off by about 11% on average
+
+-   MASE (Mean Absolute Scaled Error) – compared to naïve forecast
+
+    -   Training: 0.637 -\> \< 1 means the model is better than a naïve benchmark
+
+    -   Test: 0.634 -\> about 37% improvement over naïve forecast
+
+-   ACF1 – autocorrelation of residuals at lag 1
+
+    -   Training: -0.061
+
+    -   Test: -0.055
+
+    -   Close to 0, which means residuals are roughly uncorrelated.
+
+    -   Indicates the model captured most temporal structure.
+
+-   Theil’s U Test: 0.503
+
+    -   \< 1 means better than naïve forecasting.
+
+    -   0.50 indicates substantial improvement over a naïve model.
+
+**The SARIMA model appears well calibrated with low bias, stable training vs test performance, and clearly better than a naïve benchmark, with average forecasting error around 11% of the delay rate.**
