@@ -1,0 +1,56 @@
+# Forecasting Models and Comparison
+
+## Processing
+
+#### Load Packages
+
+```{r}
+library(lubridate)
+library(ggplot2)
+library(forecast)  
+library(Kendall)
+library(tseries)
+library(outliers)
+library(tidyverse)
+library(readxl)
+library(forecast)
+```
+
+#### Load Data
+
+```{r}
+train <- read_csv("data/clean_train_monthly.csv")
+head(train)
+```
+
+#### Convert to Time Series with Only Delay Rate Field
+
+```{r}
+train_ts <- train %>%
+  select(year, month, delay_rate) %>%
+  arrange(year, month)
+
+train_ts <- ts(train_ts$delay_rate,
+              start = c(train_ts$year[1], train_ts$month[1]),
+              frequency = 12)
+```
+
+#### Inspect Delay Rate Time Series in Training Data
+
+```{r}
+autoplot(train_ts)
+```
+
+#### Test Data Processing
+
+```{r}
+test <- read_csv("data/clean_test_monthly.csv")
+
+test_ts <- test %>%
+  select(year, month, delay_rate) %>%
+  arrange(year, month)
+
+test_ts <- ts(test_ts$delay_rate,
+              start = c(test_ts$year[1], test_ts$month[1]),
+              frequency = 12)
+```
