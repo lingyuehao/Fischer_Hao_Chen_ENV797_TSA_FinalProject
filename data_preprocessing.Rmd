@@ -1,0 +1,175 @@
+---
+title: "Data Preprocessing"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Load Packages
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+```
+
+## Load Data
+
+```{r}
+train_df <- read_csv("data/2008_2018.csv")
+test_df  <- read_csv("data/2019.csv")
+
+cat("Training set dimensions:", nrow(train_df), "rows x", ncol(train_df), "columns\n")
+cat("Column names:\n")
+print(names(train_df))
+head(train_df)
+```
+
+## Distribution of Total Flights and Delayed Flights
+
+```{r}
+ggplot(train_df, aes(x = arr_flights)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  labs(title = "Distribution of Total Flights",
+       x = "arr_flights", y = "Count")
+
+ggplot(train_df, aes(x = arr_del15)) +
+  geom_histogram(bins = 50, fill = "tomato", color = "white") +
+  labs(title = "Distribution of Delayed Flights",
+       x = "arr_del15", y = "Count")
+```
+
+## Delayed Flights vs Total Flights
+
+```{r}
+ggplot(train_df, aes(x = arr_flights, y = arr_del15)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  labs(title = "Delayed Flights vs Total Flights",
+       x = "Total Flights",
+       y = "Delayed Flights")
+```
+
+## Check Missing Values
+
+```{r}
+# Training set missing values
+missing_train <- train_df %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "missing_count") %>%
+  arrange(desc(missing_count))
+
+print(missing_train)
+```
+
+```{r}
+# Test set missing values
+missing_test <- test_df %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "missing_count") %>%
+  arrange(desc(missing_count))
+
+print(missing_test)
+```
+
+## Check Data Types
+
+```{r}
+str(train_df)
+```
+
+## Descriptive Statistics for Key Columns
+
+```{r}
+train_df %>%
+  select(arr_flights, arr_del15) %>%
+  summary()
+```
+
+## Preprocess Training Set (2008-2018)
+
+```{r}
+# Remove zero-flight records
+train_df <- train_df %>% filter(arr_flights > 0)
+
+# Aggregate to monthly level
+monthly_train <- train_df %>%
+  group_by(year, month) %>%
+  summarise(
+    arr_flights = sum(arr_flights, na.rm = TRUE),
+    arr_del15   = sum(arr_del15,   na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(year, month) %>%
+  mutate(delay_rate = arr_del15 / arr_flights)
+
+# Create date column
+monthly_train <- monthly_train %>%
+  mutate(date = make_date(year, month, 1L))
+
+monthly_train %>% select(date, delay_rate)
+```
+
+## Modeling Dataset (Training Set)
+
+```{r}
+ts_df <- monthly_train %>% select(date, delay_rate)
+head(ts_df)
+```
+
+## EDA: Total Delayed Flights and Delay Rate Over Time
+
+```{r, fig.width=10, fig.height=6}
+p1 <- ggplot(monthly_train, aes(x = date, y = arr_del15)) +
+  geom_line(color = "steelblue") +
+  labs(title = "Total Delayed Flights", x = NULL, y = "arr_del15")
+
+p2 <- ggplot(monthly_train, aes(x = date, y = delay_rate)) +
+  geom_line(color = "tomato") +
+  labs(title = "Delay Rate", x = NULL, y = "delay_rate")
+
+library(patchwork)
+p1 / p2
+```
+
+## Preprocess Test Set (2019)
+
+```{r}
+# Remove zero-flight records
+test_df <- test_df %>% filter(arr_flights > 0)
+
+# Aggregate to monthly level
+monthly_test <- test_df %>%
+  group_by(year, month) %>%
+  summarise(
+    arr_flights = sum(arr_flights, na.rm = TRUE),
+    arr_del15   = sum(arr_del15,   na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(year, month) %>%
+  mutate(delay_rate = arr_del15 / arr_flights)
+
+# Create date column
+monthly_test <- monthly_test %>%
+  mutate(date = make_date(year, month, 1L))
+
+# Modeling series
+ts_test <- monthly_test %>% select(date, delay_rate)
+
+head(ts_test)
+```
+
+## Export Cleaned Data
+
+```{r}
+monthly_train %>%
+  select(year, month, arr_flights, arr_del15, delay_rate) %>%
+  write_csv("data/clean_train_monthly.csv")
+
+monthly_test %>%
+  select(year, month, arr_flights, arr_del15, delay_rate) %>%
+  write_csv("data/clean_test_monthly.csv")
+
+cat("Data saved to data/clean_train_monthly.csv and data/clean_test_monthly.csv\n")
+```
