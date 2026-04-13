@@ -165,3 +165,109 @@ acc_sarima
     -   0.50 indicates substantial improvement over a naïve model.
 
 **The SARIMA model appears well calibrated with low bias, stable training vs test performance, and clearly better than a naïve benchmark, with average forecasting error around 11% of the delay rate.**
+
+```{r}
+arima_fourier <- auto.arima(train_ts,
+                            seasonal = FALSE,
+                            lambda = "auto",
+                            xreg = fourier(train_ts, K = 6))
+arima_fourier
+
+forecast_arima_fourier <- forecast(arima_fourier,
+                                   xreg = fourier(train_ts,
+                                                  K = 6,
+                                                  h = length(test_ts)),
+                                   h = length(test_ts))
+
+autoplot(forecast_arima_fourier) +
+  autolayer(test_ts, series = "Actual", PI = FALSE) +
+  ylab("delay rate") +
+  xlab("Time")
+
+acc_arima_fourier <- accuracy(forecast_arima_fourier, test_ts)
+acc_arima_fourier
+```
+
+```{r}
+tbats_fit <- tbats(train_ts)
+tbats_fit
+
+forecast_tbats <- forecast(tbats_fit, h = length(test_ts))
+
+autoplot(forecast_tbats) +
+  autolayer(test_ts, series = "Actual", PI = FALSE) +
+  ylab("delay rate") +
+  xlab("Time")
+
+acc_tbats <- accuracy(forecast_tbats, test_ts)
+acc_tbats
+```
+```{r}
+set.seed(42)
+
+nn_fit <- nnetar(train_ts,
+                 p = 1,
+                 P = 0,
+                 xreg = fourier(train_ts, K = 6))
+nn_fit
+
+forecast_nn <- forecast(nn_fit,
+                        h = length(test_ts),
+                        xreg = fourier(train_ts,
+                                       K = 6,
+                                       h = length(test_ts)))
+
+autoplot(forecast_nn) +
+  autolayer(test_ts, series = "Actual", PI = FALSE) +
+  ylab("delay rate") +
+  xlab("Time")
+
+acc_nn <- accuracy(forecast_nn, test_ts)
+acc_nn
+```
+```{r}
+library(prophet)
+
+pro_train <- train %>%
+  mutate(ds = as.Date(paste(year, month, "01", sep = "-"))) %>%
+  rename(y = delay_rate) %>%
+  select(ds, y)
+
+pro_test <- test %>%
+  mutate(ds = as.Date(paste(year, month, "01", sep = "-"))) %>%
+  rename(y = delay_rate) %>%
+  select(ds, y)
+
+prophet_fit <- prophet(pro_train)
+
+future <- make_future_dataframe(prophet_fit,
+                                periods = length(test_ts),
+                                freq = "month")
+
+forecast_prophet <- predict(prophet_fit, future)
+
+plot(prophet_fit, forecast_prophet)
+
+ggplot() +
+  geom_line(data = bind_rows(pro_train, pro_test),
+            aes(x = ds, y = y),
+            linewidth = 0.8, color = "black") +
+  geom_line(data = forecast_prophet,
+            aes(x = ds, y = yhat),
+            linewidth = 1, color = "blue") +
+  labs(title = "Prophet Forecast",
+       x = "Time",
+       y = "delay rate")
+
+prophet_for_ts <- tail(forecast_prophet$yhat, length(test_ts))
+prophet_for_ts <- ts(prophet_for_ts,
+                     start = c(test$year[1], test$month[1]),
+                     frequency = 12)
+
+acc_prophet <- accuracy(prophet_for_ts, test_ts)
+acc_prophet
+```
+Of the models run, NNETAR seems to be the best however it is not a stochastic process and it is somewhat concerning that the training error is much lower than the test error. As a result, the best choice is probably either the NNETAR model or the ARIMA model with Fourier terms.
+
+-NNETAR has lowest RMSE (0.01814), MAE (0.01612), and Theil's U (0.359) and near-zero ME. Although, training metrics are a lot better than test metrics
+-ARIMA with Fourier has second-lowest RMSE (0.02046), MAE (0.01840), and Theil's U (0.404) and also near-zero ME. Not much difference between training metrics and test metrics.
