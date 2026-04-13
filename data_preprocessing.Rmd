@@ -1,0 +1,175 @@
+---
+title: "Data Preprocessing"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## 加载包
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+```
+
+## 加载数据
+
+```{r}
+train_df <- read_csv("data/2008_2018.csv")
+test_df  <- read_csv("data/2019.csv")
+
+cat("训练集维度:", nrow(train_df), "行 x", ncol(train_df), "列\n")
+cat("列名:\n")
+print(names(train_df))
+head(train_df)
+```
+
+## 数据可视化：到达航班与延误航班分布
+
+```{r}
+ggplot(train_df, aes(x = arr_flights)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  labs(title = "Distribution of Total Flights",
+       x = "arr_flights", y = "Count")
+
+ggplot(train_df, aes(x = arr_del15)) +
+  geom_histogram(bins = 50, fill = "tomato", color = "white") +
+  labs(title = "Distribution of Delayed Flights",
+       x = "arr_del15", y = "Count")
+```
+
+## 散点图：延误航班 vs 总航班
+
+```{r}
+ggplot(train_df, aes(x = arr_flights, y = arr_del15)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  labs(title = "Delayed Flights vs Total Flights",
+       x = "Total Flights",
+       y = "Delayed Flights")
+```
+
+## 检查缺失值
+
+```{r}
+# 训练集缺失值
+missing_train <- train_df %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "missing_count") %>%
+  arrange(desc(missing_count))
+
+print(missing_train)
+```
+
+```{r}
+# 测试集缺失值
+missing_test <- test_df %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "missing_count") %>%
+  arrange(desc(missing_count))
+
+print(missing_test)
+```
+
+## 检查数据类型
+
+```{r}
+str(train_df)
+```
+
+## 关键列描述性统计
+
+```{r}
+train_df %>%
+  select(arr_flights, arr_del15) %>%
+  summary()
+```
+
+## 预处理训练集（2008–2018）
+
+```{r}
+# 移除零航班记录
+train_df <- train_df %>% filter(arr_flights > 0)
+
+# 按年月聚合
+monthly_train <- train_df %>%
+  group_by(year, month) %>%
+  summarise(
+    arr_flights = sum(arr_flights, na.rm = TRUE),
+    arr_del15   = sum(arr_del15,   na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(year, month) %>%
+  mutate(delay_rate = arr_del15 / arr_flights)
+
+# 创建日期列
+monthly_train <- monthly_train %>%
+  mutate(date = make_date(year, month, 1L))
+
+monthly_train %>% select(date, delay_rate)
+```
+
+## 建模数据集（训练集）
+
+```{r}
+ts_df <- monthly_train %>% select(date, delay_rate)
+head(ts_df)
+```
+
+## EDA：延误航班总量与延误率随时间变化
+
+```{r, fig.width=10, fig.height=6}
+p1 <- ggplot(monthly_train, aes(x = date, y = arr_del15)) +
+  geom_line(color = "steelblue") +
+  labs(title = "Total Delayed Flights", x = NULL, y = "arr_del15")
+
+p2 <- ggplot(monthly_train, aes(x = date, y = delay_rate)) +
+  geom_line(color = "tomato") +
+  labs(title = "Delay Rate", x = NULL, y = "delay_rate")
+
+library(patchwork)
+p1 / p2
+```
+
+## 预处理测试集（2019）
+
+```{r}
+# 移除零航班记录
+test_df <- test_df %>% filter(arr_flights > 0)
+
+# 按年月聚合
+monthly_test <- test_df %>%
+  group_by(year, month) %>%
+  summarise(
+    arr_flights = sum(arr_flights, na.rm = TRUE),
+    arr_del15   = sum(arr_del15,   na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(year, month) %>%
+  mutate(delay_rate = arr_del15 / arr_flights)
+
+# 创建日期列
+monthly_test <- monthly_test %>%
+  mutate(date = make_date(year, month, 1L))
+
+# 建模序列
+ts_test <- monthly_test %>% select(date, delay_rate)
+
+head(ts_test)
+```
+
+## 导出清洗后的数据
+
+```{r}
+monthly_train %>%
+  select(year, month, arr_flights, arr_del15, delay_rate) %>%
+  write_csv("data/clean_train_monthly.csv")
+
+monthly_test %>%
+  select(year, month, arr_flights, arr_del15, delay_rate) %>%
+  write_csv("data/clean_test_monthly.csv")
+
+cat("数据已保存到 data/clean_train_monthly.csv 和 data/clean_test_monthly.csv\n")
+```
