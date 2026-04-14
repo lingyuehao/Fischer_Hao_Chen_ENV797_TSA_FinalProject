@@ -41,7 +41,16 @@ train_ts <- ts(train_ts$delay_rate,
 autoplot(train_ts)
 ```
 
-#### Decompose Using STL
+#### ADF Test for Stationarity
+
+```{r}
+library(tseries)
+adf.test(train_ts)
+```
+
+**P=0.01\<0.05 can reject the null hypothesis of unit root. Therefore, the series is stationary.**
+
+#### Decomposition using STL
 
 ```{r}
 decomp <- stl(train_ts, s.window = "periodic")
@@ -166,6 +175,8 @@ acc_sarima
 
 **The SARIMA model appears well calibrated with low bias, stable training vs test performance, and clearly better than a naïve benchmark, with average forecasting error around 11% of the delay rate.**
 
+## Model 3: ARIMA with Fourier Term
+
 ```{r}
 arima_fourier <- auto.arima(train_ts,
                             seasonal = FALSE,
@@ -188,6 +199,8 @@ acc_arima_fourier <- accuracy(forecast_arima_fourier, test_ts)
 acc_arima_fourier
 ```
 
+## Model 4: TBATS
+
 ```{r}
 tbats_fit <- tbats(train_ts)
 tbats_fit
@@ -202,6 +215,9 @@ autoplot(forecast_tbats) +
 acc_tbats <- accuracy(forecast_tbats, test_ts)
 acc_tbats
 ```
+
+## Model 5: NNETAR
+
 ```{r}
 set.seed(42)
 
@@ -225,6 +241,9 @@ autoplot(forecast_nn) +
 acc_nn <- accuracy(forecast_nn, test_ts)
 acc_nn
 ```
+
+## Model 6: Prophet
+
 ```{r}
 library(prophet)
 
@@ -259,6 +278,9 @@ ggplot() +
        x = "Time",
        y = "delay rate")
 
+```
+
+```{r}
 prophet_for_ts <- tail(forecast_prophet$yhat, length(test_ts))
 prophet_for_ts <- ts(prophet_for_ts,
                      start = c(test$year[1], test$month[1]),
@@ -267,7 +289,74 @@ prophet_for_ts <- ts(prophet_for_ts,
 acc_prophet <- accuracy(prophet_for_ts, test_ts)
 acc_prophet
 ```
+
 Of the models run, NNETAR seems to be the best however it is not a stochastic process and it is somewhat concerning that the training error is much lower than the test error. As a result, the best choice is probably either the NNETAR model or the ARIMA model with Fourier terms.
 
--NNETAR has lowest RMSE (0.01814), MAE (0.01612), and Theil's U (0.359) and near-zero ME. Although, training metrics are a lot better than test metrics
--ARIMA with Fourier has second-lowest RMSE (0.02046), MAE (0.01840), and Theil's U (0.404) and also near-zero ME. Not much difference between training metrics and test metrics.
+-NNETAR has lowest RMSE (0.01814), MAE (0.01612), and Theil's U (0.359) and near-zero ME. Although, training metrics are a lot better than test metrics -ARIMA with Fourier has second-lowest RMSE (0.02046), MAE (0.01840), and Theil's U (0.404) and also near-zero ME. Not much difference between training metrics and test metrics.
+
+## Model Evaluation and Comparison
+
+```{r}
+acc_table <- bind_rows(
+  data.frame(Model="Prophet", as.data.frame(acc_prophet)["Test set", ]),
+  data.frame(Model="NNETAR", as.data.frame(acc_nn)["Test set", ]),
+  data.frame(Model="TBATS", as.data.frame(acc_tbats)["Test set", ]),
+  data.frame(Model="ARIMA_Fourier", as.data.frame(acc_arima_fourier)["Test set", ]),
+  data.frame(Model="SARIMA", as.data.frame(acc_sarima)["Test set", ]),
+  data.frame(Model="ETS", as.data.frame(acc_ets)["Test set", ])
+)
+
+acc_table
+```
+
+#### RMSE
+
+-   Measures overall forecast error magnitude.
+
+<!-- -->
+
+-   Penalizes large errors more heavily.
+
+```{r}
+library(ggplot2)
+
+ggplot(acc_table, aes(x = reorder(Model, -RMSE), y = RMSE)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = round(RMSE, 3)), 
+            hjust = -0.1) +
+  coord_flip() +
+  xlab("Model") +
+  ylab("RMSE") +
+  ggtitle("RMSE (Root Mean Squared Error)") + 
+  expand_limits(y = max(acc_table$RMSE) * 1.1)
+```
+
+#### MAE
+
+-   Average absolute difference between forecast and actual values.
+
+```{r}
+ggplot(acc_table, aes(x = reorder(Model, -MAE), y = MAE)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = round(MAE, 3)), 
+            hjust = -0.1) +
+  coord_flip() +
+  xlab("Model") +
+  ylab("MAE") +
+  ggtitle("MAE (Mean Absolute Error)") + 
+  expand_limits(y = max(acc_table$MAE) * 1.1)
+```
+
+#### MAPE
+
+```{r}
+ggplot(acc_table, aes(x = reorder(Model, -MAPE), y = MAPE)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = round(MAPE, 3)), 
+            hjust = -0.1) +
+  coord_flip() +
+  xlab("Model") +
+  ylab("MAPE") +
+  ggtitle("MAPE (Mean Absolute Percentage Error)") + 
+  expand_limits(y = max(acc_table$MAPE) * 1.1)
+```
