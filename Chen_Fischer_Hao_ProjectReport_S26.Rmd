@@ -1,0 +1,238 @@
+---
+title: "Forecasting Flight Delays at RDU Airport Using Time Series Models"
+author: "Bruce Chen, Lingyue Hao, Matthew Fischer"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+geometry: margin=2.54cm
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  fig.align = "center",
+  out.width = "85%"
+)
+
+# Data wrangling & visualization
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(patchwork)
+
+# Time series analysis
+library(forecast)
+library(tseries)
+library(Kendall)
+
+# Forecasting
+library(prophet)
+
+# Reporting
+library(knitr)
+library(kableExtra)
+```
+
+\newpage
+
+# Introduction, Motivation, Relevance, and Objectives
+
+## Background and Context
+
+Flight delays remain one of the most persistent operational challenges in commercial aviation, with substantial economic and social consequences. According to the U.S. Bureau of Transportation Statistics (BTS), arrival delays directly translate into lost productivity, missed connections, increased fuel consumption, and diminished passenger satisfaction. At the national level, the Federal Aviation Administration has estimated that the total cost of flight delays to the U.S. economy exceeds tens of billions of dollars annually, highlighting the value of reliable delay forecasting for both industry stakeholders and public policy.
+
+Raleigh–Durham International Airport (RDU) serves the Research Triangle region of North Carolina, one of the fastest-growing metropolitan areas in the United States. RDU handles millions of passengers each year and continues to expand its route network to accommodate rising demand. As regional air traffic grows, the ability to anticipate periods of elevated delay activity becomes increasingly important for airport operations, airline scheduling, and passenger decision-making.
+
+## Motivation and Relevance
+
+Three considerations motivated the choice of RDU as the study site. First, RDU is a mid-sized hub whose delay dynamics are shaped by a diverse mix of carriers, which provides a representative case for generalizable forecasting methods. Second, the Research Triangle's sustained population and economic growth make accurate delay forecasts operationally valuable for regional businesses, commuters, and airport authorities. Third, the BTS provides consistent, long-horizon monthly data on on-time performance at the airport–carrier level, enabling a sufficiently long training history for statistical time series modeling.
+
+Accurate forecasts of monthly delay rates support several downstream decisions. Airlines and ground-handling operators can adjust staffing, gate allocation, and aircraft rotations in anticipation of high-delay months. Airport management can plan capacity, communication campaigns, and irregular-operations protocols around predicted seasonal peaks. Passengers and regional logistics operators can incorporate expected delay patterns into travel and shipping decisions. Because these operational decisions are often made on a monthly planning cycle, a monthly-resolution forecast aligns naturally with real-world planning horizons.
+
+## Objectives
+
+The objectives of this project are as follows:
+
+1. Construct a clean, monthly-resolution time series of arrival delay rates at RDU using BTS carrier-level records from January 2008 through December 2019.
+2. Characterize the time series structure at RDU, including stationarity, trend, and seasonality, and rigorously evaluate whether identified seasonal structure reflects genuine signal rather than an artifact of the decomposition method.
+3. Fit and compare a range of forecasting models spanning classical, state-space, regression-based, and machine-learning approaches: ETS, SARIMA, ARIMA with Fourier terms, TBATS, NNETAR, and Prophet.
+4. Evaluate model performance on a held-out 2019 test set using multiple accuracy metrics (RMSE, MAE, MAPE, MASE) and diagnose model residuals to assess whether each model has captured the underlying temporal structure.
+5. Identify the most suitable model for operational forecasting at RDU and document the limitations of the chosen approach, including implications for post-pandemic extensions of the analysis.
+
+The full code base, data-processing pipeline, and forecasting files supporting this report are available in the project's public GitHub repository: https://github.com/lingyuehao/Fischer_Hao_Chen_ENV797_TSA_FinalProject.git. 
+
+\newpage
+
+# Dataset Information
+
+## Data Source
+
+The data used in this study were obtained from the U.S. Bureau of Transportation Statistics (BTS), specifically the *Airline On-Time Performance* database maintained by the Office of Airline Information. This database provides monthly airport–carrier records of arrival performance for all U.S. domestic flights operated by certified carriers that account for at least one percent of domestic scheduled passenger revenue.
+
+Records for Raleigh–Durham International Airport (RDU) across all reporting carriers were extracted for the period **January 2008 through December 2019**. The year 2019 was chosen as the cutoff to preserve a complete pre-pandemic annual cycle for testing, avoiding the structural break introduced by COVID-19 in 2020 that would violate the stationarity assumptions of the forecasting models considered.
+
+## Raw Data Structure
+
+Each row of the raw dataset corresponds to a single carrier–month–airport combination. The key variables used in this analysis are summarized in Table 1.
+
+```{r vardesc}
+var_table <- tibble(
+  Variable = c("year", "month", "carrier", "carrier_name",
+               "airport", "arr_flights", "arr_del15", "delay_rate"),
+  Type     = c("Integer", "Integer", "Character", "Character",
+               "Character", "Numeric", "Numeric", "Numeric (derived)"),
+  Units    = c("Calendar year", "Month (1-12)", "IATA code", "Full name",
+               "IATA code (RDU)", "Flights", "Flights", "Proportion (0-1)"),
+  Description = c(
+    "Year of observation (2008-2019)",
+    "Month of observation",
+    "Two-letter airline identifier",
+    "Airline name corresponding to carrier code",
+    "Airport identifier (filtered to RDU only)",
+    "Number of arriving flights at RDU by carrier",
+    "Arrivals delayed by 15+ minutes",
+    "sum(arr_del15) / sum(arr_flights)"
+  )
+)
+
+kable(var_table,
+      booktabs = TRUE,
+      caption  = "Description of key variables in the RDU flight delay dataset.") %>%
+  kable_styling(latex_options = c("hold_position", "striped"),
+                font_size = 9)
+```
+
+The raw training-period file (2008–2018) and the test-period file (2019) both contained carrier-level monthly records across 21 variables. No missing values were detected in either file across any variable, eliminating the need for imputation.
+
+## Data Wrangling and Time Series Construction
+
+The raw data were processed into a single-series, monthly-resolution time series through the following pipeline:
+
+1. **Filter to valid records.** Carrier–month records with `arr_flights = 0` were removed, as these correspond to months in which a carrier did not operate at RDU and contain no information about delay incidence.
+
+2. **Aggregate across carriers.** For each `(year, month)` pair, the total number of arriving flights and the total number of delayed arrivals (15 minutes or more) were summed across all reporting carriers:
+$$
+\text{arr\_flights}_t = \sum_{c \in \mathcal{C}} \text{arr\_flights}_{c,t},
+\qquad
+\text{arr\_del15}_t = \sum_{c \in \mathcal{C}} \text{arr\_del15}_{c,t},
+$$
+where $\mathcal{C}$ denotes the set of reporting carriers at RDU in month $t$.
+
+3. **Construct the target variable.** The monthly delay rate was computed as:
+$$
+\text{delay\_rate}_t = \frac{\text{arr\_del15}_t}{\text{arr\_flights}_t}.
+$$
+Expressing the outcome as a rate rather than a raw count controls for month-to-month variation in traffic volume and focuses the analysis on the incidence of delay conditional on operations.
+
+4. **Create the time series object.** The resulting monthly series was converted to an R `ts` object with frequency 12 (monthly seasonality), starting in January 2008. The training set spans **January 2008–December 2018** (132 observations) and the test set spans **January–December 2019** (12 observations).
+
+This aggregation strategy captures the overall delay experience at RDU but necessarily masks carrier-level heterogeneity, a limitation discussed in the final section of this report.
+
+## Processed Dataset
+
+Table 2 displays the first ten observations of the processed monthly series used for modeling.
+
+```{r datahead}
+if (file.exists("data/clean_train_monthly.csv")) {
+  monthly_train <- readr::read_csv("data/clean_train_monthly.csv",
+                                   show_col_types = FALSE)
+
+  monthly_train %>%
+    head(10) %>%
+    mutate(delay_rate = round(delay_rate, 4)) %>%
+    kable(booktabs  = TRUE,
+          col.names = c("Year", "Month", "Arriving Flights",
+                        "Delayed Flights (15+ min)", "Delay Rate"),
+          align     = c("c", "c", "r", "r", "r"),
+          caption   = "First ten rows of the processed monthly RDU delay dataset.") %>%
+    kable_styling(latex_options = c("hold_position", "striped"),
+                  font_size  = 9)
+} else {
+  placeholder <- tibble(
+    Year = rep(2008, 10),
+    Month = 1:10,
+    `Arriving Flights` = rep(NA, 10),
+    `Delayed Flights (15+ min)` = rep(NA, 10),
+    `Delay Rate` = rep(NA, 10)
+  )
+  kable(placeholder,
+        booktabs = TRUE,
+        caption  = "Placeholder -- will render once clean_train_monthly.csv is available.") %>%
+    kable_styling(latex_options = "hold_position", font_size = 9)
+}
+```
+
+## Summary Statistics
+
+Table 3 summarizes the central tendency and range of the main variables over the training period.
+
+```{r summary}
+if (file.exists("data/clean_train_monthly.csv")) {
+  monthly_train <- readr::read_csv("data/clean_train_monthly.csv",
+                                   show_col_types = FALSE)
+
+  summary_tbl <- tibble(
+    Variable = c("Arriving Flights (monthly)",
+                 "Delayed Flights 15+ min (monthly)",
+                 "Delay Rate (monthly)"),
+    Min    = c(min(monthly_train$arr_flights),
+               min(monthly_train$arr_del15),
+               round(min(monthly_train$delay_rate), 4)),
+    Median = c(median(monthly_train$arr_flights),
+               median(monthly_train$arr_del15),
+               round(median(monthly_train$delay_rate), 4)),
+    Mean   = c(round(mean(monthly_train$arr_flights), 1),
+               round(mean(monthly_train$arr_del15), 1),
+               round(mean(monthly_train$delay_rate), 4)),
+    Max    = c(max(monthly_train$arr_flights),
+               max(monthly_train$arr_del15),
+               round(max(monthly_train$delay_rate), 4)),
+    SD     = c(round(sd(monthly_train$arr_flights), 1),
+               round(sd(monthly_train$arr_del15), 1),
+               round(sd(monthly_train$delay_rate), 4))
+  )
+
+  kable(summary_tbl,
+        booktabs = TRUE,
+        caption  = "Summary statistics for the monthly RDU delay series, January 2008-December 2018 (n = 132 months).",
+        align    = c("l", "r", "r", "r", "r", "r")) %>%
+    kable_styling(latex_options = c("hold_position", "striped"),
+                  font_size = 9)
+}
+```
+
+Over the 132-month training window, RDU handled a stable but gradually growing volume of arriving flights per month, with approximately 18–20% of flights delayed by 15 minutes or more on average. The monthly delay rate exhibits moderate variation around this mean, consistent with a stationary series containing seasonal and irregular components. Detailed characterization of the temporal structure is presented in the following section.
+
+\newpage
+
+# Analysis (Methods and Models)
+
+ 
+
+\newpage
+
+# Summary and Conclusions
+
+ 
+\newpage
+
+# Statement on the Use of AI Tools {-}
+
+AI tools (OpenAI ChatGPT and Anthropic Claude) were used in a supporting role for this project. Specifically, AI assistance was used to check grammar and writing style, ensure the text adheres to a scientific rather than narrative tone, and help adjust the R Markdown and PDF formatting (YAML header, `kable` tables, LaTeX syntax).
+
+
+# References {-}
+
+U.S. Bureau of Transportation Statistics. *Airline On-Time Performance Data*. Office of Airline Information. Accessed 2026. <https://www.transtats.bts.gov/>
+
+Hyndman, R.J., & Athanasopoulos, G. *Forecasting: Principles and Practice*, 3rd ed. OTexts, 2021. <https://otexts.com/fpp3/>
+
+Taylor, S.J., & Letham, B. (2018). Forecasting at scale. *The American Statistician*, 72(1), 37–45.
+
+De Livera, A.M., Hyndman, R.J., & Snyder, R.D. (2011). Forecasting time series with complex seasonal patterns using exponential smoothing. *Journal of the American Statistical Association*, 106(496), 1513–1527.
