@@ -62,7 +62,7 @@ The objectives of this project are as follows:
 1.  Construct a clean, monthly-resolution time series of arrival delay rates at RDU using BTS carrier-level records from January 2008 through December 2019.
 2.  Characterize the time series structure at RDU, including stationarity, trend, and seasonality, and rigorously evaluate whether identified seasonal structure reflects genuine signal rather than an artifact of the decomposition method.
 3.  Fit and compare a range of forecasting models spanning classical, state-space, regression-based, and machine-learning approaches: ETS, SARIMA, ARIMA with Fourier terms, TBATS, NNETAR, and Prophet.
-4.  Evaluate model performance on a held-out 2019 test set using multiple accuracy metrics (RMSE, MAE, MAPE, MASE) and diagnose model residuals to assess whether each model has captured the underlying temporal structure.
+4.  Evaluate model performance on a held-out 2019 test set using multiple accuracy metrics (RMSE, MAE) and diagnose model residuals to assess whether each model has captured the underlying temporal structure.
 5.  Identify the most suitable model for operational forecasting at RDU and document the limitations of the chosen approach, including implications for post-pandemic extensions of the analysis.
 
 The full code base, data-processing pipeline, and forecasting files supporting this report are available in the project's public GitHub repository: <https://github.com/lingyuehao/Fischer_Hao_Chen_ENV797_TSA_FinalProject.git>.
@@ -209,16 +209,10 @@ Over the 132-month training window, RDU handled a stable but gradually growing v
 
 # Inspection & Analysis
 
-#### Load Data
+## ADF Test for Stationarity
 
-```{r}
+```{r results='hide'}
 train <- read_csv("data/clean_train_monthly.csv")
-head(train)
-```
-
-#### Convert to Time Series with Only Delay Rate Field
-
-```{r}
 train_ts <- train %>%
   select(year, month, delay_rate) %>%
   arrange(year, month)
@@ -226,12 +220,6 @@ train_ts <- train %>%
 train_ts <- ts(train_ts$delay_rate,
               start = c(train_ts$year[1], train_ts$month[1]),
               frequency = 12)
-head(train_ts)
-```
-
-#### ADF Test for Stationarity
-
-```{r}
 adf.test(train_ts)
 ```
 
@@ -239,12 +227,13 @@ The Augmented Dickey–Fuller test returns a test statistic of -4.2993 with a p�
 
 For forecasting, this suggests that non‑seasonal differencing may not be necessary when fitting ARIMA-type models (d \~ 0). However, seasonal differencing may still be required if seasonal patterns are present, and models such as SARIMA, ETS, or other seasonal forecasting approaches can still be appropriate.
 
-#### Autocorrelation
+## Autocorrelation
 
-```{r}
-par(mfrow = c(1,2))
+```{r acf_pacf, fig.cap="ACF and PACF of the monthly delay rate at RDU."}
+par(mfrow = c(1,2), oma = c(0, 0, 2, 0))
 acf(train_ts, main = "ACF")
 pacf(train_ts, main = "PACF")
+mtext("ACF and PACF of Monthly Delay Rate", outer = TRUE, cex = 1.2, font = 2)
 par(mfrow = c(1,1))
 ```
 
@@ -252,45 +241,49 @@ The ACF plot shows a strong positive autocorrelation at lag 1 and a noticeable s
 
 The PACF plot shows a significant spike at lag 1 and some additional seasonal spikes near lag 12, which further supports an autoregressive component and seasonal effects. Together, these patterns suggest the time series contains short‑term autocorrelation and seasonal dependence, making seasonal ARIMA–type models appropriate for forecasting.
 
-#### Decomposition
+## Decomposition
 
-```{r}
+``` {r decomp, fig.cap="STL decomposition of the monthly delay rate at RDU into trend, seasonal, and remainder components."}
 decomp <- stl(train_ts, s.window = "periodic")
-autoplot(decomp)
+autoplot(decomp) +
+  ggtitle("STL Decomposition of Monthly Delay Rate") +
+  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
 ```
 
-[**Data (Observed Series)**]{.underline}
+### Data (Observed Series) 
 
 The observed data show monthly fluctuations in the air travel delay rate at RDU between roughly 0.10 and 0.30. The series displays noticeable short‑term variability with recurring peaks and troughs across years, suggesting the presence of seasonal patterns. Although the monthly values fluctuate considerably, there are also broader movements over time, indicating that both long‑term trends and seasonal effects contribute to the overall behavior of the series.
 
-[**Trend**]{.underline}
+### Trend
 
 The trend component reveals the longer‑term evolution of delay rates. From 2008 to around 2010, there is a gradual decline in delay rates. Between 2011 and 2012, the trend drops more sharply and reaches its lowest point around 2012. After this, delays increase again from roughly 2012 to 2014, reflecting a recovery period. From 2015 to 2017, the trend shows a mild decline or plateau, indicating relatively stable conditions. Finally, from about 2018 onward, the trend rises again. This pattern reflects changes in demand and operational conditions at RDU over time. The initial decline likely corresponds to reduced air travel during the global recession, which decreased congestion and delays. As the economy recovered, passenger traffic increased between 2012 and 2014, placing more pressure on airport infrastructure and raising delay rates. Operational adjustments helped stabilize delays from 2015 to 2017, but rapid passenger growth by 2018 and 2019 appears to have again pushed delays upward.
 
-[**Seasonal**]{.underline}
+### Seasonal 
 
 The seasonal component shows a clear and repeating annual pattern. Delays tend to increase during the summer months and then decline sharply in the fall. The magnitude of the seasonal effect is relatively consistent across years, with an amplitude of roughly ±0.04 to 0.05, meaning seasonality can change the delay rate by about 4–5 percentage points. This pattern is consistent with seasonal travel demand, where summer months often experience higher passenger volumes and potentially more weather‑related disruptions. However, it is important to note that decomposition methods such as STL impose a seasonal structure by design, so some seasonal pattern will always appear. Therefore, the following will help validate the stable seasonal structure:
 
-```{r}
+```{r results='hide'}
 nsdiffs(train_ts)
 ```
 
 This result suggests that one seasonal difference (D = 1) is needed to remove seasonal dependence in the series, meaning observations are strongly related to values from the same month in the previous year.
 
-```{r}
-ggseasonplot(train_ts)
+```{r seasonal_plot, fig.cap="Seasonal plot of monthly delay rate by year, highlighting the consistent summer peak and fall trough across the training period."}
+ggseasonplot(train_ts) +
+  ggtitle("Seasonal Plot: Monthly Delay Rate by Year") +
+  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
 ```
 
-The seasonal plot shows a consistent yearly pattern in the delay rate across different years. Most years follow a similar shape: delays tend to increase from late spring into the summer, peaking around June–July, and then decline sharply toward the fall months, with the lowest values typically occurring around September–November. Toward the end of the year, delays rise again slightly in December, which may reflect increased holiday travel and winter weather disruptions. Although the exact levels vary by year, the overall monthly pattern is fairly consistent, indicating a stable seasonal cycle in the data. Together, the seasonal plot and the seasonal differencing test confirm that the time series exhibits meaningful annual seasonality,
+The seasonal plot shows a consistent yearly pattern in the delay rate across different years. Most years follow a similar shape: delays tend to increase from late spring into the summer, peaking around June–July, and then decline sharply toward the fall months, with the lowest values typically occurring around September–November. Toward the end of the year, delays rise again slightly in December, which may reflect increased holiday travel and winter weather disruptions. Although the exact levels vary by year, the overall monthly pattern is fairly consistent, indicating a stable seasonal cycle in the data. Together, the seasonal plot and the seasonal differencing test confirm that the time series exhibits meaningful annual seasonality.
 
-[**Remainder (Noise)**]{.underline}
+### Remainder (Noise) 
 
 The remainder component represents the irregular variation not explained by the trend or seasonal components. In this decomposition, the residual values are mostly centered around zero and appear relatively small compared to the seasonal variation. Occasional spikes occur, indicating months with unusually high or low delay rates that cannot be explained by the general trend or seasonal cycle. Importantly, the remainder does not display obvious systematic patterns or persistent autocorrelation, suggesting that the trend and seasonal components capture most of the underlying structure of the series. This supports the interpretation that the identified seasonal pattern is likely meaningful rather than purely an artifact of the decomposition method.
 
-\newpage
 
 # Forecasting (Methods and Models)
 
+## Model 1: ETS
 We fitted a total of 6 models to our data. The first model fitted was an ETS model, which explicitly accounts for the 3 main components: Error, Trend, Seasonality, assigning exponentially decreasing weights to older data. The ETS model performs well with low bias and \~11% average percentage error, beats the naïve forecast clearly (MASE \< 1, Theil’s U \< 1), and shows slightly better test accuracy than training, suggesting stable forecasting performance.
 
 ```{r model_1_ets}
@@ -314,13 +307,14 @@ autoplot(forecast_ets) +
   xlab("Time") +
   labs(
     title = "Model 1: ETS",
-    caption = "Figure 3: ETS forecast vs actual."
+    caption = "Figure 4: ETS forecast vs actual."
   ) +
   theme(
     plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
   )
 ```
 
+## Model 2: SARIMA
 We then fitted a SARIMA model with the parameters being determined using auto.arima. The resulting model has non-seasonal terms (1,0.0) and seasonal terms (2,1,0). Notably the P = 2 means there are 2 seasonal autoregressive terms, a given value depends on the values 12 and 24 months prior. The SARIMA model appears well calibrated with low bias, stable training vs test performance, and clearly better than a naïve benchmark, with average forecasting error around 11% of the delay rate.
 
 ```{r model_2_sarima}
@@ -334,13 +328,14 @@ autoplot(forecast_sarima) +
   xlab("Time") +
   labs(
     title = "Model 2: SARIMA(1,0,0)(2,1,0)[12]",
-    caption = "Figure 4: SARIMA forecast vs actual."
+    caption = "Figure 5: SARIMA forecast vs actual."
   ) +
   theme(
     plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
   )
 ```
 
+## Model 3: ARIMA with Fourier Terms
 We then employed more advanced models, first fitting an ARIMA model with Fourier terms. The resulting model uses Fourier terms as external regressors to capture the monthly seasonal pattern, replacing the need for a seasonal ARIMA structure. The remaining residuals are modeled as ARIMA(1,0,1). 
 
 ```{r model_3_arima_with_fourier_terms}
@@ -361,14 +356,15 @@ autoplot(forecast_arima_fourier) +
   xlab("Time") +
     labs(
     title = "Model 3: ARIMA(1,0,1) with Fourier Terms",
-    caption = "Figure 5: ARIMA with Fourier terms forecast vs actual."
+    caption = "Figure 6: ARIMA with Fourier terms forecast vs actual."
   ) +
   theme(
     plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
   )
 ```
 
-In fitting a TBATS model to the data, a Box-Cox transformation with $\lambda$ = 0.621 to stabilize variance was ampplied, no autoregressive structure was needed in this model, no trend was detected in the data, and monthly seasonality was modeled using 5 Fourier terms.
+## Model 4: TBATS
+In fitting a TBATS model to the data, a Box-Cox transformation with $\lambda$ = 0.621 to stabilize variance was applied, no autoregressive structure was needed in this model, no trend was detected in the data, and monthly seasonality was modeled using 5 Fourier terms.
 
 ```{r model_4_tbats}
 tbats_fit <- tbats(train_ts)
@@ -381,14 +377,15 @@ autoplot(forecast_tbats) +
   xlab("Time") +
     labs(
     title = "Model 4: TBATS(0.621, {0,0}, -, {<12,5>})",
-    caption = "Figure 6: TBATS forecast vs actual."
+    caption = "Figure 7: TBATS forecast vs actual."
   ) +
   theme(
     plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
   )
 ```
 
-We then moved on to a feed-forward neural network autoregressive model with 1 non-seasonal lag term as the only autoregressive input and 6 neurons in a single hidden layer. It is worth noting that this model is the average of 20 networks, providing some more stability, although the model is still non-deterministic and so we set a random seed for reproducability. The NNAR model has notably better training performance than testing performance, which means that there is risk of overfitting.
+## Model 5: NNETAR
+We then moved on to a feed-forward neural network autoregressive model with 1 non-seasonal lag term as the only autoregressive input and 6 neurons in a single hidden layer. It is worth noting that this model is the average of 20 networks, providing some more stability, although the model is still non-deterministic and so we set a random seed for reproducibility. The NNAR model has notably better training performance than testing performance, which means that there is risk of overfitting.
 
 ```{r model_5_nnetar}
 set.seed(42)
@@ -410,16 +407,17 @@ autoplot(forecast_nn) +
   xlab("Time") +
     labs(
     title = "Model 5: NNETAR(1,6)",
-    caption = "Figure 7: NNETAR forecast vs actual."
+    caption = "Figure 8: NNETAR forecast vs actual."
   ) +
   theme(
     plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
   )
 ```
 
-For all of the models so far, they fail to forecst the actual, initial, positive spike in the test data. Although this may not be due to flaws of our models, as instead they may represent real-life conditions that did not follow historical patterns. Also, our models tended to underestimate the amplitude of spikes in the actual test data. Excluding this, our models seem to be fairly close to the test data.
+For all of the models so far, they fail to forecast the actual, initial, positive spike in the test data. Although this may not be due to flaws of our models, as instead they may represent real-life conditions that did not follow historical patterns. Also, our models tended to underestimate the amplitude of spikes in the actual test data. Excluding this, our models seem to be fairly close to the test data.
 
-Lastly, we also applied Meta's Propet model, which decomposes the time series into trend, seasonality (modeled by Fourier series), and holiday effects, fitting each component separately.
+## Model 6: Prophet
+Lastly, we also applied Meta's Prophet model, which decomposes the time series into trend, seasonality (modeled by Fourier series), and holiday effects, fitting each component separately.
 
 ```{r model_6_prophet}
 library(prophet)
@@ -450,7 +448,7 @@ ggplot() +
             aes(x = ds, y = yhat),
             linewidth = 1, color = "blue") +
   labs(title = "Model 6: Prophet",
-       caption = "Figure 8: Prophet forecast vs actual.",
+       caption = "Figure 9: Prophet forecast vs actual.",
        x = "Time",
        y = "delay rate") +
   theme(
@@ -458,9 +456,10 @@ ggplot() +
   )
 ```
 
-Once again, the Prophet model tends underestimates the amplitude of many of the spikes in the actual data, but with a few exceptions, its forecasts lie fairly close to the actual data.
+Once again, the Prophet model tends to underestimate the amplitude of many of the spikes in the actual data, but with a few exceptions, its forecasts lie fairly close to the actual data.
 
-As shown in Figures 9 and 10, across our evaluation metrics, our best performing models seem to be the feed-forward neaural network autoregressive model, the Prophet model, and the ARIMA model with Fourier terms. That being said, due to how close the performance of the models are, as well as the variability (due to not being deterministic) and the risk of overfitting of the neural network model, we might recommend using the Prophet model or the ARIMA model with Fourier terms.
+## Model Comparison
+As shown in Figures 10 and 11, across our evaluation metrics, our best performing models seem to be the feed-forward neural network autoregressive model, the Prophet model, and the ARIMA model with Fourier terms. That being said, due to how close the performance of the models are, as well as the variability (due to not being deterministic) and the risk of overfitting of the neural network model, we might recommend using the Prophet model or the ARIMA model with Fourier terms.
 
 ```{r model_comparison_and_evaluation}
 acc_ets <- accuracy(forecast_ets, test_ts)
@@ -495,7 +494,7 @@ ggplot(acc_table, aes(x = reorder(Model, -RMSE), y = RMSE)) +
   xlab("Model") +
   ylab("RMSE") +
   ggtitle("RMSE (Root Mean Squared Error)") + 
-  labs(caption = "Figure 9: Comparison of the RMSE scores of each model.") + 
+  labs(caption = "Figure 10: Comparison of the RMSE scores of each model.") + 
   theme(
     plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
   ) +
@@ -509,15 +508,22 @@ ggplot(acc_table, aes(x = reorder(Model, -MAE), y = MAE)) +
   xlab("Model") +
   ylab("MAE") +
   ggtitle("MAE (Mean Absolute Error) Model Comparison") + 
-  labs(caption = "Figure 10: Comparison of the MAE scores of each model.") + 
+  labs(caption = "Figure 11: Comparison of the MAE scores of each model.") + 
   theme(
     plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
   ) +
   expand_limits(y = max(acc_table$MAE) * 1.1)
 ```
-\newpage
 
 # Summary and Conclusions
+
+We built a monthly time series of arrival delay rates at RDU from 2008 to 2019 using BTS carrier-level data, trained six forecasting models on 2008–2018, and evaluated them on 2019. The series was stationary by ADF (p = 0.01), with clear yearly seasonality confirmed by both the STL decomposition and the seasonal plot. The remainder component fluctuated around zero without obvious leftover structure, which gave us confidence the seasonality is a real signal rather than an artifact of the decomposition.
+
+All six models landed in a fairly narrow performance range, with RMSE between 0.018 and 0.027 and MAE between 0.016 and 0.022. NNETAR scored the best, followed closely by Prophet and ARIMA with Fourier terms. Most models underestimated the amplitude of the spikes in 2019 and missed the early-2019 peak entirely, which likely reflects a mix of natural smoothing in time series models and one-off operational or weather events that don't show up in historical patterns.
+
+For a final recommendation, we would favor Prophet or ARIMA with Fourier terms over NNETAR. Although NNETAR was slightly more accurate, it is non-deterministic and shows some signs of overfitting, which makes its performance harder to rely on in practice. Prophet and ARIMA with Fourier terms deliver comparable accuracy with stable, reproducible output, and both produce proper prediction intervals that are useful for operational planning. Between the two, ARIMA with Fourier terms offers a more transparent statistical structure, while Prophet handles trend changes and holiday effects more flexibly; either is a defensible choice for forecasting monthly delay rates at RDU.
+
+Several limitations are worth noting. The monthly resolution hides within-month patterns like day-of-week or weather effects. The training window stops at 2018 to avoid COVID-19, but this means the models reflect a pre-pandemic regime that may no longer apply. Aggregating across carriers also masks carrier-level differences, since a few large airlines dominate the total signal. Future improvements could include adding exogenous variables (scheduled flights, weather, fuel prices), extending to post-COVID data once enough is available, or moving to a finer time resolution to capture operational detail that monthly data smooths over.
 
 \newpage
 
