@@ -235,9 +235,9 @@ head(train_ts)
 adf.test(train_ts)
 ```
 
-The Augmented Dickey–Fuller test returns a test statistic of −4.2993 with a p‑value of 0.01. Since the p‑value is below 0.05, the null hypothesis of a unit root (non‑stationarity) is rejected, indicating that the time series is likely stationary. This means the series does not exhibit a persistent stochastic trend and its statistical properties such as mean and variance remain relatively stable over time.
+The Augmented Dickey–Fuller test returns a test statistic of -4.2993 with a p‑value of 0.01. Since the p‑value is below 0.05, the null hypothesis of a unit root (non‑stationarity) is rejected, indicating that the time series is likely stationary. This means the series does not exhibit a persistent stochastic trend and its statistical properties such as mean and variance remain relatively stable over time.
 
-For forecasting, this suggests that non‑seasonal differencing may not be necessary when fitting ARIMA-type models (d ≈ 0). However, seasonal differencing may still be required if seasonal patterns are present, and models such as SARIMA, ETS, or other seasonal forecasting approaches can still be appropriate.
+For forecasting, this suggests that non‑seasonal differencing may not be necessary when fitting ARIMA-type models (d \~ 0). However, seasonal differencing may still be required if seasonal patterns are present, and models such as SARIMA, ETS, or other seasonal forecasting approaches can still be appropriate.
 
 #### Autocorrelation
 
@@ -291,6 +291,230 @@ The remainder component represents the irregular variation not explained by the 
 
 # Forecasting (Methods and Models)
 
+We fitted a total of 6 models to our data. The first model fitted was an ETS model, which explicitly accounts for the 3 main components: Error, Trend, Seasonality, assigning exponentially decreasing weights to older data. The ETS model performs well with low bias and \~11% average percentage error, beats the naïve forecast clearly (MASE \< 1, Theil’s U \< 1), and shows slightly better test accuracy than training, suggesting stable forecasting performance.
+
+```{r model_1_ets}
+test <- read_csv("data/clean_test_monthly.csv")
+
+test_ts <- test %>%
+  select(year, month, delay_rate) %>%
+  arrange(year, month)
+
+test_ts <- ts(test_ts$delay_rate,
+              start = c(test_ts$year[1], test_ts$month[1]),
+              frequency = 12)
+
+ets <- ets(train_ts)
+
+forecast_ets <- forecast(ets, h = length(test_ts))
+
+autoplot(forecast_ets) +
+  autolayer(test_ts, series = "Actual", PI = FALSE) +
+  ylab("delay rate") +
+  xlab("Time") +
+  labs(
+    title = "Model 1: ETS",
+    caption = "Figure 3: ETS forecast vs actual."
+  ) +
+  theme(
+    plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
+  )
+```
+
+We then fitted a SARIMA model with the parameters being determined using auto.arima. The resulting model has non-seasonal terms (1,0.0) and seasonal terms (2,1,0). Notably the P = 2 means there are 2 seasonal autoregressive terms, a given value depends on the values 12 and 24 months prior. The SARIMA model appears well calibrated with low bias, stable training vs test performance, and clearly better than a naïve benchmark, with average forecasting error around 11% of the delay rate.
+
+```{r model_2_sarima}
+sarima <- auto.arima(train_ts, seasonal = TRUE)
+
+forecast_sarima <- forecast(sarima, h = length(test_ts))
+
+autoplot(forecast_sarima) +
+  autolayer(test_ts, series = "Actual", PI = FALSE) +
+  ylab("delay rate") +
+  xlab("Time") +
+  labs(
+    title = "Model 2: SARIMA(1,0,0)(2,1,0)[12]",
+    caption = "Figure 4: SARIMA forecast vs actual."
+  ) +
+  theme(
+    plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
+  )
+```
+
+We then employed more advanced models, first fitting an ARIMA model with Fourier terms. The resulting model uses Fourier terms as external regressors to capture the monthly seasonal pattern, replacing the need for a seasonal ARIMA structure. The remaining residuals are modeled as ARIMA(1,0,1). 
+
+```{r model_3_arima_with_fourier_terms}
+arima_fourier <- auto.arima(train_ts,
+                            seasonal = FALSE,
+                            lambda = "auto",
+                            xreg = fourier(train_ts, K = 6))
+
+forecast_arima_fourier <- forecast(arima_fourier,
+                                   xreg = fourier(train_ts,
+                                                  K = 6,
+                                                  h = length(test_ts)),
+                                   h = length(test_ts))
+
+autoplot(forecast_arima_fourier) +
+  autolayer(test_ts, series = "Actual", PI = FALSE) +
+  ylab("delay rate") +
+  xlab("Time") +
+    labs(
+    title = "Model 3: ARIMA(1,0,1) with Fourier Terms",
+    caption = "Figure 5: ARIMA with Fourier terms forecast vs actual."
+  ) +
+  theme(
+    plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
+  )
+```
+
+In fitting a TBATS model to the data, a Box-Cox transformation with $\lambda$ = 0.621 to stabilize variance was ampplied, no autoregressive structure was needed in this model, no trend was detected in the data, and monthly seasonality was modeled using 5 Fourier terms.
+
+```{r model_4_tbats}
+tbats_fit <- tbats(train_ts)
+
+forecast_tbats <- forecast(tbats_fit, h = length(test_ts))
+
+autoplot(forecast_tbats) +
+  autolayer(test_ts, series = "Actual", PI = FALSE) +
+  ylab("delay rate") +
+  xlab("Time") +
+    labs(
+    title = "Model 4: TBATS(0.621, {0,0}, -, {<12,5>})",
+    caption = "Figure 6: TBATS forecast vs actual."
+  ) +
+  theme(
+    plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
+  )
+```
+
+We then moved on to a feed-forward neural network autoregressive model with 1 non-seasonal lag term as the only autoregressive input and 6 neurons in a single hidden layer. It is worth noting that this model is the average of 20 networks, providing some more stability, although the model is still non-deterministic and so we set a random seed for reproducability. The NNAR model has notably better training performance than testing performance, which means that there is risk of overfitting.
+
+```{r model_5_nnetar}
+set.seed(42)
+
+nn_fit <- nnetar(train_ts,
+                 p = 1,
+                 P = 0,
+                 xreg = fourier(train_ts, K = 6))
+
+forecast_nn <- forecast(nn_fit,
+                        h = length(test_ts),
+                        xreg = fourier(train_ts,
+                                       K = 6,
+                                       h = length(test_ts)))
+
+autoplot(forecast_nn) +
+  autolayer(test_ts, series = "Actual", PI = FALSE) +
+  ylab("delay rate") +
+  xlab("Time") +
+    labs(
+    title = "Model 5: NNETAR(1,6)",
+    caption = "Figure 7: NNETAR forecast vs actual."
+  ) +
+  theme(
+    plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
+  )
+```
+
+For all of the models so far, they fail to forecst the actual, initial, positive spike in the test data. Although this may not be due to flaws of our models, as instead they may represent real-life conditions that did not follow historical patterns. Also, our models tended to underestimate the amplitude of spikes in the actual test data. Excluding this, our models seem to be fairly close to the test data.
+
+Lastly, we also applied Meta's Propet model, which decomposes the time series into trend, seasonality (modeled by Fourier series), and holiday effects, fitting each component separately.
+
+```{r model_6_prophet}
+library(prophet)
+
+pro_train <- train %>%
+  mutate(ds = as.Date(paste(year, month, "01", sep = "-"))) %>%
+  rename(y = delay_rate) %>%
+  select(ds, y)
+
+pro_test <- test %>%
+  mutate(ds = as.Date(paste(year, month, "01", sep = "-"))) %>%
+  rename(y = delay_rate) %>%
+  select(ds, y)
+
+prophet_fit <- prophet(pro_train)
+
+future <- make_future_dataframe(prophet_fit,
+                                periods = length(test_ts),
+                                freq = "month")
+
+forecast_prophet <- predict(prophet_fit, future)
+
+ggplot() +
+  geom_line(data = bind_rows(pro_train, pro_test),
+            aes(x = ds, y = y),
+            linewidth = 0.8, color = "black") +
+  geom_line(data = forecast_prophet,
+            aes(x = ds, y = yhat),
+            linewidth = 1, color = "blue") +
+  labs(title = "Model 6: Prophet",
+       caption = "Figure 8: Prophet forecast vs actual.",
+       x = "Time",
+       y = "delay rate") +
+  theme(
+    plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
+  )
+```
+
+Once again, the Prophet model tends underestimates the amplitude of many of the spikes in the actual data, but with a few exceptions, its forecasts lie fairly close to the actual data.
+
+As shown in Figures 9 and 10, across our evaluation metrics, our best performing models seem to be the feed-forward neaural network autoregressive model, the Prophet model, and the ARIMA model with Fourier terms. That being said, due to how close the performance of the models are, as well as the variability (due to not being deterministic) and the risk of overfitting of the neural network model, we might recommend using the Prophet model or the ARIMA model with Fourier terms.
+
+```{r model_comparison_and_evaluation}
+acc_ets <- accuracy(forecast_ets, test_ts)
+acc_sarima <- accuracy(forecast_sarima, test_ts)
+acc_arima_fourier <- accuracy(forecast_arima_fourier, test_ts)
+acc_tbats <- accuracy(forecast_tbats, test_ts)
+acc_nn <- accuracy(forecast_nn, test_ts)
+
+prophet_for_ts <- tail(forecast_prophet$yhat, length(test_ts))
+prophet_for_ts <- ts(prophet_for_ts,
+                     start = c(test$year[1], test$month[1]),
+                     frequency = 12)
+
+acc_prophet <- accuracy(prophet_for_ts, test_ts)
+
+acc_table <- bind_rows(
+  data.frame(Model="Prophet", as.data.frame(acc_prophet)["Test set", ]),
+  data.frame(Model="NNETAR", as.data.frame(acc_nn)["Test set", ]),
+  data.frame(Model="TBATS", as.data.frame(acc_tbats)["Test set", ]),
+  data.frame(Model="ARIMA_Fourier", as.data.frame(acc_arima_fourier)["Test set", ]),
+  data.frame(Model="SARIMA", as.data.frame(acc_sarima)["Test set", ]),
+  data.frame(Model="ETS", as.data.frame(acc_ets)["Test set", ])
+)
+
+library(ggplot2)
+
+ggplot(acc_table, aes(x = reorder(Model, -RMSE), y = RMSE)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = round(RMSE, 3)), 
+            hjust = -0.1) +
+  coord_flip() +
+  xlab("Model") +
+  ylab("RMSE") +
+  ggtitle("RMSE (Root Mean Squared Error)") + 
+  labs(caption = "Figure 9: Comparison of the RMSE scores of each model.") + 
+  theme(
+    plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
+  ) +
+  expand_limits(y = max(acc_table$RMSE) * 1.1)
+
+ggplot(acc_table, aes(x = reorder(Model, -MAE), y = MAE)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = round(MAE, 3)), 
+            hjust = -0.1) +
+  coord_flip() +
+  xlab("Model") +
+  ylab("MAE") +
+  ggtitle("MAE (Mean Absolute Error) Model Comparison") + 
+  labs(caption = "Figure 10: Comparison of the MAE scores of each model.") + 
+  theme(
+    plot.caption = element_text(size = 9, face = "italic", hjust = 0.5)
+  ) +
+  expand_limits(y = max(acc_table$MAE) * 1.1)
+```
 \newpage
 
 # Summary and Conclusions
