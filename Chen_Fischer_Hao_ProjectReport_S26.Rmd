@@ -59,13 +59,13 @@ Accurate forecasts of monthly delay rates support several downstream decisions. 
 
 The objectives of this project are as follows:
 
-1. Construct a clean, monthly-resolution time series of arrival delay rates at RDU using BTS carrier-level records from January 2008 through December 2019.
-2. Characterize the time series structure at RDU, including stationarity, trend, and seasonality, and rigorously evaluate whether identified seasonal structure reflects genuine signal rather than an artifact of the decomposition method.
-3. Fit and compare a range of forecasting models spanning classical, state-space, regression-based, and machine-learning approaches: ETS, SARIMA, ARIMA with Fourier terms, TBATS, NNETAR, and Prophet.
-4. Evaluate model performance on a held-out 2019 test set using multiple accuracy metrics (RMSE, MAE, MAPE, MASE) and diagnose model residuals to assess whether each model has captured the underlying temporal structure.
-5. Identify the most suitable model for operational forecasting at RDU and document the limitations of the chosen approach, including implications for post-pandemic extensions of the analysis.
+1.  Construct a clean, monthly-resolution time series of arrival delay rates at RDU using BTS carrier-level records from January 2008 through December 2019.
+2.  Characterize the time series structure at RDU, including stationarity, trend, and seasonality, and rigorously evaluate whether identified seasonal structure reflects genuine signal rather than an artifact of the decomposition method.
+3.  Fit and compare a range of forecasting models spanning classical, state-space, regression-based, and machine-learning approaches: ETS, SARIMA, ARIMA with Fourier terms, TBATS, NNETAR, and Prophet.
+4.  Evaluate model performance on a held-out 2019 test set using multiple accuracy metrics (RMSE, MAE, MAPE, MASE) and diagnose model residuals to assess whether each model has captured the underlying temporal structure.
+5.  Identify the most suitable model for operational forecasting at RDU and document the limitations of the chosen approach, including implications for post-pandemic extensions of the analysis.
 
-The full code base, data-processing pipeline, and forecasting files supporting this report are available in the project's public GitHub repository: https://github.com/lingyuehao/Fischer_Hao_Chen_ENV797_TSA_FinalProject.git. 
+The full code base, data-processing pipeline, and forecasting files supporting this report are available in the project's public GitHub repository: <https://github.com/lingyuehao/Fischer_Hao_Chen_ENV797_TSA_FinalProject.git>.
 
 \newpage
 
@@ -114,23 +114,19 @@ The raw training-period file (2008–2018) and the test-period file (2019) both 
 
 The raw data were processed into a single-series, monthly-resolution time series through the following pipeline:
 
-1. **Filter to valid records.** Carrier–month records with `arr_flights = 0` were removed, as these correspond to months in which a carrier did not operate at RDU and contain no information about delay incidence.
+1.  **Filter to valid records.** Carrier–month records with `arr_flights = 0` were removed, as these correspond to months in which a carrier did not operate at RDU and contain no information about delay incidence.
 
-2. **Aggregate across carriers.** For each `(year, month)` pair, the total number of arriving flights and the total number of delayed arrivals (15 minutes or more) were summed across all reporting carriers:
-$$
-\text{arr\_flights}_t = \sum_{c \in \mathcal{C}} \text{arr\_flights}_{c,t},
-\qquad
-\text{arr\_del15}_t = \sum_{c \in \mathcal{C}} \text{arr\_del15}_{c,t},
-$$
-where $\mathcal{C}$ denotes the set of reporting carriers at RDU in month $t$.
+2.  **Aggregate across carriers.** For each `(year, month)` pair, the total number of arriving flights and the total number of delayed arrivals (15 minutes or more) were summed across all reporting carriers: $$
+    \text{arr\_flights}_t = \sum_{c \in \mathcal{C}} \text{arr\_flights}_{c,t},
+    \qquad
+    \text{arr\_del15}_t = \sum_{c \in \mathcal{C}} \text{arr\_del15}_{c,t},
+    $$ where $\mathcal{C}$ denotes the set of reporting carriers at RDU in month $t$.
 
-3. **Construct the target variable.** The monthly delay rate was computed as:
-$$
-\text{delay\_rate}_t = \frac{\text{arr\_del15}_t}{\text{arr\_flights}_t}.
-$$
-Expressing the outcome as a rate rather than a raw count controls for month-to-month variation in traffic volume and focuses the analysis on the incidence of delay conditional on operations.
+3.  **Construct the target variable.** The monthly delay rate was computed as: $$
+    \text{delay\_rate}_t = \frac{\text{arr\_del15}_t}{\text{arr\_flights}_t}.
+    $$ Expressing the outcome as a rate rather than a raw count controls for month-to-month variation in traffic volume and focuses the analysis on the incidence of delay conditional on operations.
 
-4. **Create the time series object.** The resulting monthly series was converted to an R `ts` object with frequency 12 (monthly seasonality), starting in January 2008. The training set spans **January 2008–December 2018** (132 observations) and the test set spans **January–December 2019** (12 observations).
+4.  **Create the time series object.** The resulting monthly series was converted to an R `ts` object with frequency 12 (monthly seasonality), starting in January 2008. The training set spans **January 2008–December 2018** (132 observations) and the test set spans **January–December 2019** (12 observations).
 
 This aggregation strategy captures the overall delay experience at RDU but necessarily masks carrier-level heterogeneity, a limitation discussed in the final section of this report.
 
@@ -211,23 +207,101 @@ Over the 132-month training window, RDU handled a stable but gradually growing v
 
 \newpage
 
-# Analysis (Methods and Models)
+# Inspection & Analysis
 
- 
+#### Load Data
+
+```{r}
+train <- read_csv("data/clean_train_monthly.csv")
+head(train)
+```
+
+#### Convert to Time Series with Only Delay Rate Field
+
+```{r}
+train_ts <- train %>%
+  select(year, month, delay_rate) %>%
+  arrange(year, month)
+
+train_ts <- ts(train_ts$delay_rate,
+              start = c(train_ts$year[1], train_ts$month[1]),
+              frequency = 12)
+head(train_ts)
+```
+
+#### ADF Test for Stationarity
+
+```{r}
+adf.test(train_ts)
+```
+
+The Augmented Dickey–Fuller test returns a test statistic of −4.2993 with a p‑value of 0.01. Since the p‑value is below 0.05, the null hypothesis of a unit root (non‑stationarity) is rejected, indicating that the time series is likely stationary. This means the series does not exhibit a persistent stochastic trend and its statistical properties such as mean and variance remain relatively stable over time.
+
+For forecasting, this suggests that non‑seasonal differencing may not be necessary when fitting ARIMA-type models (d ≈ 0). However, seasonal differencing may still be required if seasonal patterns are present, and models such as SARIMA, ETS, or other seasonal forecasting approaches can still be appropriate.
+
+#### Autocorrelation
+
+```{r}
+par(mfrow = c(1,2))
+acf(train_ts, main = "ACF")
+pacf(train_ts, main = "PACF")
+par(mfrow = c(1,1))
+```
+
+The ACF plot shows a strong positive autocorrelation at lag 1 and a noticeable spike around lag 12, suggesting both short‑term dependence and yearly seasonality in the monthly series. The correlations generally decay rather than cutting off sharply, indicating the presence of autoregressive structure.
+
+The PACF plot shows a significant spike at lag 1 and some additional seasonal spikes near lag 12, which further supports an autoregressive component and seasonal effects. Together, these patterns suggest the time series contains short‑term autocorrelation and seasonal dependence, making seasonal ARIMA–type models appropriate for forecasting.
+
+#### Decomposition
+
+```{r}
+decomp <- stl(train_ts, s.window = "periodic")
+autoplot(decomp)
+```
+
+[**Data (Observed Series)**]{.underline}
+
+The observed data show monthly fluctuations in the air travel delay rate at RDU between roughly 0.10 and 0.30. The series displays noticeable short‑term variability with recurring peaks and troughs across years, suggesting the presence of seasonal patterns. Although the monthly values fluctuate considerably, there are also broader movements over time, indicating that both long‑term trends and seasonal effects contribute to the overall behavior of the series.
+
+[**Trend**]{.underline}
+
+The trend component reveals the longer‑term evolution of delay rates. From 2008 to around 2010, there is a gradual decline in delay rates. Between 2011 and 2012, the trend drops more sharply and reaches its lowest point around 2012. After this, delays increase again from roughly 2012 to 2014, reflecting a recovery period. From 2015 to 2017, the trend shows a mild decline or plateau, indicating relatively stable conditions. Finally, from about 2018 onward, the trend rises again. This pattern reflects changes in demand and operational conditions at RDU over time. The initial decline likely corresponds to reduced air travel during the global recession, which decreased congestion and delays. As the economy recovered, passenger traffic increased between 2012 and 2014, placing more pressure on airport infrastructure and raising delay rates. Operational adjustments helped stabilize delays from 2015 to 2017, but rapid passenger growth by 2018 and 2019 appears to have again pushed delays upward.
+
+[**Seasonal**]{.underline}
+
+The seasonal component shows a clear and repeating annual pattern. Delays tend to increase during the summer months and then decline sharply in the fall. The magnitude of the seasonal effect is relatively consistent across years, with an amplitude of roughly ±0.04 to 0.05, meaning seasonality can change the delay rate by about 4–5 percentage points. This pattern is consistent with seasonal travel demand, where summer months often experience higher passenger volumes and potentially more weather‑related disruptions. However, it is important to note that decomposition methods such as STL impose a seasonal structure by design, so some seasonal pattern will always appear. Therefore, the following will help validate the stable seasonal structure:
+
+```{r}
+nsdiffs(train_ts)
+```
+
+This result suggests that one seasonal difference (D = 1) is needed to remove seasonal dependence in the series, meaning observations are strongly related to values from the same month in the previous year.
+
+```{r}
+ggseasonplot(train_ts)
+```
+
+The seasonal plot shows a consistent yearly pattern in the delay rate across different years. Most years follow a similar shape: delays tend to increase from late spring into the summer, peaking around June–July, and then decline sharply toward the fall months, with the lowest values typically occurring around September–November. Toward the end of the year, delays rise again slightly in December, which may reflect increased holiday travel and winter weather disruptions. Although the exact levels vary by year, the overall monthly pattern is fairly consistent, indicating a stable seasonal cycle in the data. Together, the seasonal plot and the seasonal differencing test confirm that the time series exhibits meaningful annual seasonality,
+
+[**Remainder (Noise)**]{.underline}
+
+The remainder component represents the irregular variation not explained by the trend or seasonal components. In this decomposition, the residual values are mostly centered around zero and appear relatively small compared to the seasonal variation. Occasional spikes occur, indicating months with unusually high or low delay rates that cannot be explained by the general trend or seasonal cycle. Importantly, the remainder does not display obvious systematic patterns or persistent autocorrelation, suggesting that the trend and seasonal components capture most of the underlying structure of the series. This supports the interpretation that the identified seasonal pattern is likely meaningful rather than purely an artifact of the decomposition method.
+
+\newpage
+
+# Forecasting (Methods and Models)
 
 \newpage
 
 # Summary and Conclusions
 
- 
 \newpage
 
-# Statement on the Use of AI Tools {-}
+# Statement on the Use of AI Tools {.unnumbered}
 
 AI tools (OpenAI ChatGPT and Anthropic Claude) were used in a supporting role for this project. Specifically, AI assistance was used to check grammar and writing style, ensure the text adheres to a scientific rather than narrative tone, and help adjust the R Markdown and PDF formatting (YAML header, `kable` tables, LaTeX syntax).
 
-
-# References {-}
+# References {.unnumbered}
 
 U.S. Bureau of Transportation Statistics. *Airline On-Time Performance Data*. Office of Airline Information. Accessed 2026. <https://www.transtats.bts.gov/>
 
